@@ -1,0 +1,240 @@
+---
+title: "Making an epicurve, step by step"
+subtitle: "R session 2"
+author: "MSF"
+date: "Date of making report: `r Sys.Date()`"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+  word_document:
+    toc: yes
+---
+
+
+```{r setup, include=FALSE, results='hide', message=FALSE, warning=FALSE}
+## clean the environnement
+rm(list=ls())
+## hide all code chunks in the output, but show errors
+knitr::opts_chunk$set(echo       = TRUE, # hide all code chunks in output
+                      error      = TRUE,  # show errors if they appear, but don't stop
+                      message    = FALSE, # do not show warnings in the output doc
+                      warning    = FALSE, # do not show  messages in the output doc
+                      fig.width  = 12,    # Figure width
+                      fig.height = 5      # Figure height
+                      )
+## set default NA to - in output
+options(knitr.kable.NA = "-")
+
+# Ensures the package "pacman" is installed
+if (!require("pacman")) {
+     install.packages("pacman") }
+
+## Installing required packages for this template
+pacman::p_load(
+  here,        # find your files
+  rio,         # read in data
+  tidyverse)
+
+```
+
+# Load the data
+```{r load_data}
+combined <- import(here::here("data", "clean", "backup", "linelist_combined_20141201.rds"))
+```
+
+# Simple epidemic curve, default setting
+```{r}
+## simple epidemic curve, default setting
+ggplot(                     # open the plot
+  data = combined,          # open the database
+  mapping = aes(
+    x = date_onset          # chose variable(s) to include
+  )) +
+  geom_histogram()          # choose the geometry histogram
+```
+
+# Simple epidemic curve,  binwidth = 1 (each bar = 1 day)
+```{r}
+## simple epidemic curve,  binwidth = 1 (each bar = 1 day)
+ggplot(
+  data = combined,
+  mapping = aes(
+    x = date_onset
+  )) +
+  geom_histogram(binwidth = 1) # specify the bin width
+```
+
+# Simple epidemic curve, binwidth = 7 (each bar = 7 days)
+```{r}
+## simple epidemic curve,  binwidth = 7 (each bar = 7 days)
+ # but... we don't know when start the bin 
+ggplot(
+  data = combined,
+  mapping = aes(
+    x = date_onset
+  ))+
+  geom_histogram(binwidth = 7) # specify the bin width
+```
+
+
+# Simple epidemic curve, using parameter breaks to define the break points for the histogram bins
+## Create the break points for the histogram bins
+```{r}
+# first date of onset
+min(combined$date_onset, na.rm = T)
+# last date of onset
+max(combined$date_onset, na.rm = T)
+
+# first day of the week of the week of the first date of onset
+floor_date(min(combined$date_onset, na.rm = T),
+           unit = "week",
+           week_start = 1)
+# first day of the week of the following week of the last date of onset
+ceiling_date(max(combined$date_onset, na.rm = T),
+           unit = "week",
+           week_start = 1)
+
+# break points for the histogram bin
+ # => sequence of dates with first day of the week of all weeks from the week with the first date of onset to the week with the last date of onset  
+ebola_weeks <- 
+  seq.Date(
+    from = floor_date(min(combined$date_onset, na.rm = T),
+                      unit = "week",
+                      week_start = 1),
+    to   = ceiling_date(max(combined$date_onset, na.rm = T),
+                        unit = "week",
+                        week_start = 1),
+    by   = "weeks"
+  )
+ebola_weeks
+```
+
+## Making the epicurve 
+```{r}
+ggplot(
+  data = combined,
+  mapping = aes(
+    x = date_onset
+  ))+
+  geom_histogram(
+    breaks = ebola_weeks # specify the break points for the histogram bins
+  )
+
+```
+
+# Simple epidemic curve with break points and x-axis with month using scale_x_date
+```{r}
+ggplot(
+  data = combined,
+  mapping = aes(
+    x = date_onset
+  ))+
+  geom_histogram(
+    breaks = ebola_weeks
+  ) +
+scale_x_date(
+    date_breaks = "1 months") # specify the labels on the x axis (date), appears every month
+```
+
+
+# simple epidemic curve with break points and x-axis with month using scale_x_date
+```{r}
+## simple epidemic curve with break points and x-axis with month using scale_x_date
+ggplot(
+  data = combined,
+  mapping = aes(
+    x = date_onset
+  ))+
+  geom_histogram(
+    breaks = ebola_weeks
+  ) +
+  scale_x_date(
+    date_breaks = "1 months",  # specify the labels on the x axis (date): a label every month
+    date_labels = "%B")        # specify the format of the labels : month name
+```
+
+# Simple epidemic curve with break points and x-axis with weeks using scale_x_date and label_date_short
+```{r}
+## simple epidemic curve with break points and x-axis with weeks using scale_x_date and label_date_short
+ggplot(
+  data = combined,
+  mapping = aes(
+    x = date_onset
+  ))+
+  geom_histogram(
+    breaks = ebola_weeks
+  ) +
+  scale_x_date(
+    date_breaks = "1 week",             # specify the labels on the x axis (date): a label every week
+    labels = scales::label_date_short() # automatically constructs a short format string sufficient to uniquely identify labels
+  )
+```
+
+# Same as previous changing color of lines around bars and color of fill within bars
+```{r}
+## same as previous changing color of lines around bars and color of fill within bars
+ggplot(
+  data = combined,
+  mapping = aes(
+    x = date_onset
+  ))+
+  geom_histogram(
+    breaks = ebola_weeks,
+    color = "darkblue",     # color of lines around bars
+    fill = "lightblue"      # color of fill within bars
+  ) +
+  scale_x_date(
+    date_breaks = "1 months",
+    labels = scales::label_date_short()
+  )
+```
+
+# Same as previous adding labels for titles
+```{r}
+## same as previous adding labels for titles
+ggplot(
+  data = combined,
+  mapping = aes(
+    x = date_onset
+  ))+
+  geom_histogram(
+    breaks = ebola_weeks,
+    color = "darkblue",     # color of lines around bars
+    fill = "lightblue"      # color of fill within bars
+  ) +
+  scale_x_date(
+    date_breaks = "1 months",
+    labels = scales::label_date_short()
+    ) +
+  labs(x = "Date",                                                  # title of x-axis
+       y = "Cases (n)",                                             # title of y-axis
+       title = "Cases by week of onset",                            # graphic title
+       subtitle = str_glue("Source: MSF data from {Sys.Date()}"))   # graphic sub-title
+```
+
+# Same as previous with simplify plot background using theme_bw()
+```{r}
+## same as previous with simplify plot background using theme_bw()
+ggplot(
+  data = combined,
+  mapping = aes(
+    x = date_onset
+  ))+
+  geom_histogram(
+    breaks = ebola_weeks,
+    color = "darkblue",     # color of lines around bars
+    fill = "lightblue"      # color of fill within bars
+  ) +
+  scale_x_date(
+    date_breaks = "2 weeks",
+    labels = scales::label_date_short()
+  ) +
+  labs(x = "Date",                                                  # title of x-axis
+       y = "Cases (n)",                                             # title of y-axis
+       title = "Cases by week of onset",                            # graphic title
+       subtitle = str_glue("Source: MSF data from {Sys.Date()}"))+   # graphic sub-title
+  theme_bw()                # simplify plot background
+```
+
