@@ -1,6 +1,6 @@
 R coaching session materials
 ================
-01 April 2024
+02 April 2024
 
 - [Overview](#overview)
   - [Material source](#material-source)
@@ -55,19 +55,34 @@ the exercises. We gratefully acknowledge and thank the authors of the
 
 Currently you can access tutorials for the following sessions:
 
+- *Session 1: working with R markdown documents*
+  - [click
+    here](https://msf-eph-r.github.io/r-coaching/S1_rmarkdown.zip) to
+    download session 1 materials
 - *Session 2: making epicurves*
   - [click
-    here](https://msf-oca-r.github.io/r-coaching/S2_epicurves.zip) to
+    here](https://msf-eph-r.github.io/r-coaching/S2_epicurves.zip) to
     download session 2 materials
   - [click
-    here](https://msf-oca-r.github.io/r-coaching/Tutorial_S2_epicurves.html)
+    here](https://msf-eph-r.github.io/r-coaching/Tutorial_S2_epicurves.html)
     to access the session 2 tutorial online
-- *Session 3: descriptive statistics and logistic regression*
-  - [click here](https://msf-oca-r.github.io/r-coaching/S3_stats.zip) to
+- *Session 3: dealing with complex data structures - joining, binding
+  and pivoting*
+  - [click
+    here](https://msf-eph-r.github.io/r-coaching/S3_pivots_joins.zip) to
     download session 3 materials
   - [click
-    here](https://msf-oca-r.github.io/r-coaching/Tutorial_S3_statistics.html)
-    to access the session 3 tutorial online
+    here](https://msf-eph-r.github.io/r-coaching/Tutorial_S3a_pivotsjoins.html)
+    to access the session 3a tutorial (joining and binding) online
+  - [click
+    here](https://msf-eph-r.github.io/r-coaching/Tutorial_S3b_pivotsjoins.html)
+    to access the session 3b tutorial (pivoting data) online
+- *Session 4: descriptive statistics and logistic regression*
+  - [click here](https://msf-eph-r.github.io/r-coaching/S4_stats.zip) to
+    download session 4 materials
+  - [click
+    here](https://msf-eph-r.github.io/r-coaching/Tutorial_S4_statistics.html)
+    to access the session 4 tutorial online
 
 This list will be updated as new sessions become available.
 
@@ -105,14 +120,14 @@ or the coaching series, please see below for how to contribute.
 
 These tutorials are covered by a Gnu General Public Licence version 3
 (GPL-3). Please read the [licence
-conditions](https://github.com/msf-oca-r/r-coaching/blob/main/LICENSE)
+conditions](https://github.com/msf-eph-r/r-coaching/blob/main/LICENSE)
 before using or distributing them.
 
 ### Contributing
 
 The R code for the tutorials and practical materials on this page are
 hosted on the [MSF OCA R coaching
-repository](https://github.com/msf-oca-r/r-coaching.git). Revisions and
+repository](https://github.com/msf-eph-r/r-coaching.git). Revisions and
 contributions are welcome; please check out your own branch to commit
 the updates and then submit a pull request. Write access to the
 repository can be provided on request.
@@ -121,7 +136,7 @@ repository can be provided on request.
 
 Comments and suggestions are welcome. If you have found a bug in the
 tutorials, please raise an issue about it on the [MSF OCA R coaching
-repository issues page](https://github.com/msf-oca-r/r-coaching/issues),
+repository issues page](https://github.com/msf-eph-r/r-coaching/issues),
 clearly stating the nature of the problem and providing a reproducible
 example. You can also use the **issues** page to suggest revisions, new
 features or topics to cover in future tutorials.

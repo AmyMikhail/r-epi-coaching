@@ -1,0 +1,453 @@
+---
+title: "IST analysis CXB"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  bookdown::html_document2:
+    code_folding: show
+    toc: yes
+    toc_float:
+      toc_collapsed: no
+      smooth_scroll: yes
+    toc_depth: 3
+theme: sandstone
+geometry: margin = 1.5cm
+editor_options:
+  markdown:
+    wrap: 72
+urlcolor: blue
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+
+# Set chunk options:
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE)
+```
+
+
+## Objective
+
+Address the following issues with the current code used for analysis of IST data 
+in Cox's Bazaar, Bangladesh:
+
+  + Data not importing from the Excel sheets
+  + Epicurve needs to be grouped bars rather than adjacent
+  
+
+## Load packages
+
+```{r load_packages}
+
+# Ensures the package "pacman" is installed - install it if not:
+if (!require("pacman")) install.packages("pacman")
+
+# Use pacman::p_load function to load all the tidyverse packages at once:
+pacman::p_load(
+  
+  # Package for downloading packages from github and using R markdown:
+  remotes,
+  knitr,
+  rmarkdown,
+  tinytex,
+  
+  # Packages for constructing file paths and importing data:
+  here,
+  rio,
+  openxlsx, 
+  
+  # Packages for data exploration:
+  skimr,
+  janitor,
+  
+  # Packages for outputs (tables and graphs):
+  scales,
+
+  # Tidyverse packages for data wrangling:
+  tidyverse
+)
+
+# Install latex with tinytex package if not already installed:
+#tinytex::install_tinytex()
+
+
+
+```
+
+
+## Advice on folder structure:
+
+Issues with file sourcing can be readily avoided as follows:
+
+  + Set up a folder on your computer which only contains the data you want to analyse and the scripts you have written to analyse it.
+  + Create separate sub-folders called `data` and `scripts` and move the relevant content into them.
+  + Create a new RStudio project inside this folder
+  + Open or switch to the RStudio project
+  + Use the `here` and `rio` packages as shown below to construct a relative file path and import the data (this will work on anyone's computer if you send them the .zip file of the project folder)
+
+
+## Import data
+
+Here you have two tables on two separate sheets - one is acute watery diarrhoea and the other is cholera RDT positive, stratified by MSF section.  I think it would be most helpful in the first instance to combine these into one single data set (so you can work out proportions etc if needed) and convert it to 'long' format. The advantage of doing it this way is that the bars in the graph can be constructed from a single variable (rather than three separate ones representing each OC). 
+
+Importing first of all:
+
+```{r import_data}
+
+# Import the acute watery diarrhea data from the first sheet:
+awd <- rio::import(
+  here("data", "ist_awd_2.xls"), 
+  sheet = "ist_awd_1")
+
+# Import the cholera RDT positive data from the second sheet:
+cholera <- rio::import(
+  here("data", "ist_awd_2.xls"), 
+  sheet = "ist_RDT+_cholera")
+
+# Check column classes and structure of the two data sets:
+skim(awd)
+skim(cholera)
+
+```
+
+
+You can see that one advantage of importing the data with the `{rio}` package is that it automatically tries to identify the column classes and in this case has identified correctly that the `month_year` column is a date column.  The date column is `POSIXct` class, but for accessing date label features in ggplot, it is better to convert it to `date` class with the `lubridate::ymd()` function.
+
+To convert the data sets to long format first of all, we can use `pivot_longer()` to pivot the columns containing the OC-specific values:
+
+```{r reshape_data}
+
+#############################
+# Reshape the awd data first:
+awd <- awd %>% 
+  
+  pivot_longer(
+    # Columns to pivot:
+    cols = starts_with("oc"), 
+    # New column for the column names that are being pivoted to go in:
+    names_to = "msf_section",
+    # New column to put the values in that are being pivoted:
+    values_to = "awd"
+  ) %>% 
+  
+  # Rename the month total column to identify it after the merge:
+  rename(mtotal_awd = month_total) %>% 
+  
+  # Relocate the total column to the end of the data set:
+  relocate(mtotal_awd, .after = awd)
+
+
+############################################
+# Now reshape the cholera RDT positive data:
+cholera <- cholera %>% 
+  
+  pivot_longer(
+    # Columns to pivot:
+    cols = starts_with("oc"), 
+    # New column for column names:
+    names_to = "msf_section", 
+    # New column for values:
+    values_to = "rdt_pos"
+  ) %>% 
+  
+  # Rename the month total column to identify it after the merge:
+  rename(mtotal_rdtpos = month_total) %>% 
+  
+  # Relocate to the end of the data set:
+  relocate(mtotal_rdtpos, .after = rdt_pos)
+
+
+##################################################
+# Finally we can merge the two data sets into one:
+awdchol <- awd %>% 
+  
+  # Join the cholera RDT data to awd data by year_month and msf_section:
+  left_join(cholera, by = c("year_month", "msf_section")) %>% 
+  
+  # Calculate percentages of AWD cases who are cholera RDT positive:
+  mutate(confirmed = round((rdt_pos/awd)*100, digits = 2)) %>% 
+  
+  # Convert year-month to date:
+  mutate(year_month = ymd(year_month)) %>% 
+  
+  # Capitalise OC names:
+  mutate(msf_section = toupper(msf_section)) 
+  
+
+
+```
+
+
+
+## Create plot
+
+Now that the data is in the correct format, we can use ggplot to create the plot.
+To make sure that the bars appear adjacent to each other as opposed to stacked, we use `geom_bar()`, with `fill = msf_section` (the column we created to hold the OCs when the data was pivoted to long format) in the aesthetic mappings and set the position to `dodge` and stat to `identity`.  We can put the x axis in the top-level mapping (it will be inherited by all the geoms that come after it) because it stays the same for each geom.  However the y axis will differ for each geom (we use the OC-specific values for the grouped bars and overall monthly totals for the line graph and its labels).
+
+```{r epicurve_awd}
+
+# Create the plot:
+awdchol %>% 
+  
+  # Define the aesthetic mappings:
+  ggplot(mapping = aes(x = year_month)) +
+  
+  # Create the bar chart grouped by MSF section:
+  geom_bar(mapping = aes(fill = msf_section, y = awd), 
+           position = "dodge", 
+           stat = "identity") +
+  
+  # Add the line of total awd cases by month ontop:
+  geom_line(mapping = aes(y = mtotal_awd, colour = "Monthly total"), 
+            linewidth = 1) +
+  
+  # Add points for total awd cases by month:
+  geom_point(mapping = aes(y = mtotal_awd, colour = "Monthly total"), 
+             size = 1) +
+  
+  # Add text labels for monthly totals:
+  geom_text(mapping = aes(y = mtotal_awd, label = mtotal_awd), 
+            vjust = -0.5, 
+            size = 3, 
+            position = position_dodge(width = 0.9)) +
+  
+  # Add x axis date labels and spacing at either end:
+  scale_x_date(
+    # Set intervals between breaks to months:
+    date_breaks = "months",
+    # Format date labels as short name for month + 2-digit year:
+    date_labels = "%b %y", 
+    # Leave a small amount of space at either end of axis (1%):
+    expand = expansion(mult = c(0.01, 0.01))
+  ) +
+  
+  # Adjust y axis limits and intervals:
+  scale_y_continuous(
+    # Set intervals to increments of 500:
+    breaks = function(x) seq(0, range(x)[2], by = 500), 
+    # Leave extra space at top of y axis for line graph text labels:
+    expand = expansion(mult = c(0.01, 0.1))
+  ) +
+  
+  # Add legend (include line spaces to make it easier to read with \n):
+  labs(title = "Epidemiological curve of cases with acute watery diarrhoea\n",
+       x = "\nNotification date (month and year)",
+       y = "Number of cases\n",
+       caption = "\nData source: EWARS",
+       fill = "",
+       color = "") +
+  
+  # Change the colour of the bars for section totals by month:
+  scale_fill_manual(name = NULL,
+                    values = c(
+                      "OCA" = "darkblue", 
+                      "OCB" = "red3", 
+                      "OCP" = "turquoise")) +
+  
+  # Change colour of monthly total line/points to orange:
+  scale_color_manual(values = c("Monthly total" = "orange")) +
+  
+  # Change the theme to classic:
+  theme_classic() +
+  
+  # Change the legend position to bottom of the graph:
+  theme(legend.position = "bottom") +
+  
+  # Change the angle of the x axis labels so they fit better:
+  theme(axis.text.x = element_text(
+    angle = 45, 
+    vjust = 1, 
+    hjust = 1, 
+    size = 8)) +
+  
+  # Make the plot and axis titles bold and caption italic:
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.title = element_text(face = "bold"), 
+    plot.caption = element_text(face = "italic") 
+  )
+  
+
+```
+
+
+### Create function for graph
+
+Now that the graph is in the correct format, we can create a function to create the plot. This function can then be applied to graph both the AWD data and the cholera RDT positive data, avoiding the need for repetition of code.
+
+To convert to a function, all we need to do is substitute the names of the data and columns with placeholders.  We can use the `ensym()` function to convert each (unquoted) column name passed into the function into what R understands to be a column name in the data.frame.  When we reference the column placeholders in ggplot arguments, we precede them with a double exclamation mark, e.g. if `xaxis = year_month`, year_month will be passed to the ggplot argument like this: `!!xaxis` 
+
+Finally, for the function to work on any data that has the same structure, we need to remove any values that are hard-coded.  At the moment, we have specified that we want intervals of 500 on the Y axis.  This works fine for the AWD data as the maximum monthly total is nearly 3000.  However it does not work for the cholera RDT data, as the totals are much smaller.  To be scale agnostic, we can use the `pretty()` function and specify the number of intervals we want.
+
+```{r epiplot_function}
+
+# Create a function based on the ggplot code above:
+epiplot <- function(
+    data,          # The data.frame containing data to plot
+    xaxis,         # The name of the column to use as x axis
+    yaxis,         # The name of the column to use as y axis for bar plots
+    stratifier,    # The name of the column to stratify bar plots with
+    totalcol,      # The name of the totals column to use for the line graph
+    caselabel      # Character string describing cases for the plot title
+    ){
+  
+  # Call the input data df:
+  df = data
+  
+  # Define the column names:
+  xaxis = ensym(xaxis)
+  yaxis = ensym(yaxis)
+  stratifier = ensym(stratifier)
+  totalcol = ensym(totalcol)
+  
+  # Calculate the maximum value for the y axis using monthly totals column:
+  ymax = df %>% 
+    pull(!!totalcol) %>% 
+    max(na.rm = TRUE)
+  
+  # Create the plot:
+  epicurve = df %>% 
+    
+    # Define the aesthetic mappings:
+    ggplot(mapping = aes(x = !!xaxis)) +
+    
+    # Create the bar chart grouped by MSF section:
+    geom_bar(mapping = aes(fill = !!stratifier, y = !!yaxis),
+             position = "dodge",
+             stat = "identity") +
+    
+    # Add the line of total awd cases by month ontop:
+    geom_line(mapping = aes(y = !!totalcol, colour = "Monthly total"), 
+              linewidth = 1) +
+    
+    # Add points for total awd cases by month:
+    geom_point(mapping = aes(y = !!totalcol, colour = "Monthly total"),
+               size = 1) +
+    
+    # Add text labels for monthly totals:
+    geom_text(mapping = aes(y = !!totalcol, label = !!totalcol), 
+              vjust = -0.5, 
+              size = 3, 
+              position = position_dodge(width = 0.9)) +
+    
+    # Add x axis date labels and spacing at either end:
+    scale_x_date(
+      # Set intervals between breaks to months:
+      date_breaks = "months",
+      # Format date labels as short name for month + 2-digit year:
+      date_labels = "%b %y", 
+      # Leave a small amount of space at either end of axis (1%):
+      expand = expansion(mult = c(0.01, 0.01))
+      ) +
+    
+    # Adjust y axis limits and intervals:
+    scale_y_continuous(
+      # Set number of intervals to 6 using the pretty function:
+      breaks = pretty(0:ymax, n = 6, bounds = TRUE), 
+      # Leave extra space at top of y axis for line graph text labels:
+      expand = expansion(mult = c(0.01, 0.1))
+      ) +
+    
+    # Add legend (include line spaces to make it easier to read with \n):
+    labs(
+      title = paste0("Epidemic curve of ", caselabel, "\n"),
+      x = "\nNotification date (month and year)",
+      y = "Number of cases\n",
+      caption = "\nData source: EWARS",
+      fill = "",
+      color = "") +
+    
+    # Change the colour of the bars for section totals by month:
+    scale_fill_manual(
+      name = NULL,
+      values = c("OCA" = "darkblue", "OCB" = "red3", "OCP" = "turquoise")
+      ) +
+    
+    # Change colour of monthly total line/points to orange:
+    scale_color_manual(values = c("Monthly total" = "orange")) +
+    
+    # Change the theme to classic:
+    theme_classic() +
+    
+    # Change the legend position to bottom of the graph:
+    theme(legend.position = "bottom") +
+    
+    # Change the angle of the x axis labels so they fit better:
+    theme(axis.text.x = element_text(
+      angle = 45, 
+      vjust = 1, 
+      hjust = 1, 
+      size = 8)
+      ) +
+    
+    # Make the plot and axis titles bold and caption italic:
+    theme(
+      plot.title = element_text(face = "bold"),
+      axis.title = element_text(face = "bold"), 
+      plot.caption = element_text(face = "italic")
+      )
+  
+  ##############
+  # Return plot:
+  return(epicurve)
+
+}
+
+
+```
+
+
+### Create graphs with function
+
+Now we can create the two graphs with the function:
+
+#### 01. Cases of acute watery diarrhoea 
+
+```{r awdcurve_with_function}
+
+# Create the AWD graph:
+awdcurve <- epiplot(data = awdchol, 
+                    xaxis = year_month, 
+                    yaxis = awd, 
+                    stratifier = msf_section, 
+                    totalcol = mtotal_awd, 
+                    caselabel = "cases with acute watery diarrhoea")
+
+# Print the epicurve:
+awdcurve
+
+# Save the epicurve:
+ggsave(
+  plot = awdcurve, 
+  file = here("outputs", paste0("01_AWD_epicurve_", Sys.Date(), ".png"))
+  )
+
+```
+
+
+
+#### 02. Cholera RDT positive cases
+
+```{r rdtcurve_with_function}
+
+# Create the cholera RDT positive graph:
+rdtcurve <- epiplot(data = awdchol, 
+                    xaxis = year_month,
+                    yaxis = rdt_pos,
+                    stratifier = msf_section, 
+                    totalcol = mtotal_rdtpos, 
+                    caselabel = "cholera RDT positive cases")
+
+# Print the epicurve:
+rdtcurve
+
+# Save the epicurve:
+ggsave(
+  plot = rdtcurve, 
+  file = here("outputs", paste0("02_Cholera_RDT_epicurve_", Sys.Date(), ".png"))
+  )
+
+
+```
+

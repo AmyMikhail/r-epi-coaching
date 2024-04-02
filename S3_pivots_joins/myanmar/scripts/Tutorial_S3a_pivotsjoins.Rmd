@@ -1,0 +1,314 @@
+---
+title: "R coaching session 3 - pivots and joins"
+author: "Gregoire Falq"
+date: "`r format(Sys.Date(), format = '%d %B %Y')`"
+output:
+  bookdown::html_document2:
+    code_folding: show
+    toc: yes
+    toc_float:
+      toc_collapsed: no
+      smooth_scroll: yes
+    toc_depth: 3
+theme: sandstone
+geometry: margin = 1.5cm
+editor_options:
+  markdown:
+    wrap: 72
+urlcolor: blue
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+
+# Set chunk options:
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE)
+
+```
+
+
+# Introduction
+
+In this tutorial, we will be looking at how to reshape data with complex structure, so that it is in tidy (long) format and ready for analysis. You will be working with two examples:
+
+  01. Hepatitis C patient follow-up data
+  02. Patient referral data
+
+
+**Patient follow-up data: challenges**
+
+  + Each row of the data set represents one *consultation visit* by the patient
+  + This means there are multiple rows of data for each patient
+  + The data needs to summarised so that each patient is counted only once
+  + There are many columns of data, repeated for each visit
+
+  
+**Referral data: challenges**
+
+  + The data is in two separate files, which need to be combined
+  + Each file contains data for each month in a separate sheet
+  + The rows of data from the different sheets need to be combined together
+
+
+## Load packages
+
+As usual, we will begin by loading the packages needed for this session:
+
+```{r load_packages}
+
+# Check if pacman is installed, install and load if not:
+if (!require("pacman")) {
+  install.packages("pacman") }
+
+# Use pacman to check for and load the other required packages:
+pacman::p_load(
+  here, 
+  rio, 
+  skimr,
+  janitor,
+  gtsummary,
+  flextable,
+  tidyverse)
+
+
+```
+
+
+## Import data
+
+Now we can import the Hepatitis C data:
+
+```{r import_data}
+
+# Import the hepatitis C patient follow-up data:
+dat <- import(here("data", "Hep C", "MultiCentricCohortHepC_R_session_3.csv"))
+
+```
+
+
+## Explore data
+
+We can see that it is a large data set, but it would be useful to briefly check the structure and see what it looks like in the viewer:
+
+```{r explore_data}
+
+# Get a summary of the data structure:
+str(dat)
+
+# List the column names:
+names(dat)
+
+# View the data in the viewer:
+View(head(dat))
+
+```
+
+
+# Reshaping and summarising
+
+In this section, we will reshape, count and summarise the data in some tables.
+
+
+## Visit counts
+
+It would be useful to know how many consultations each patient had.  We can number each row for the same patient sequentially, then get the maximum visit number per patient to represent the total number of consultations they had.  To do this, we will `group_by()` patient ID:
+
+
+```{r visit_counts}
+
+dat <- dat %>%
+  
+  # First we make sure blank cells are coded as NA:
+  mutate(
+    outc_end        = na_if(outc_end, ""),
+    outc_end_reason = na_if(outc_end_reason, "")
+    ) %>% 
+  
+  # Now we can group by patient ID:
+  group_by(pat_id) %>%
+  
+  # Then we calculate the number of visits per patient:
+  mutate(
+    # Here we use n() to create a sequential number for each visit
+    visit_num = 1:n(),
+    # Then we get the maximum visit number for each patient:
+    visit_num_last = max(visit_num, na.rm = TRUE)
+    ) %>%
+  
+  # Now we ungroup as subsequent operations will not be grouped by patient:
+  ungroup %>%
+  
+  # Finally, we use select to reorder the columns:
+  select(pat_id, redcap_event_name, visit_num, visit_num_last, everything())
+
+
+```
+
+
+## Dealing with data from multiple consultations
+
+How do we deal with all the data from the different follow-up consultations?  This depends on the desired analysis.  
+
+Suppose we are only interested in the final outcome at the end of patient follow-up.  This means we can filter the data and keep only the rows that correspond to the last visit for each patient:
+
+
+```{r sum_last_visit}
+
+# Make a new subset of the data:
+dat_last_consultation <- dat %>%
+  # Keep only the rows corresponding to the last visit for each patient:
+  filter(visit_num == visit_num_last) %>%
+  # Select a few key variables for summarizing:
+  select(pat_id, 
+         redcap_event_name, 
+         visit_num, 
+         visit_num_last, 
+         outc_end, 
+         outc_end_reason)
+
+
+# Check whether patients reached the end of their follow-up:
+dat_last_consultation %>%
+  tabyl(outc_end) %>%
+  qflextable
+
+# Summarise reasons for exiting the program:
+dat_last_consultation %>%
+  tabyl(outc_end_reason) %>%
+  qflextable
+
+# Combine whether program complete and reasons for exit
+dat_last_consultation %>%
+  tabyl(outc_end_reason, outc_end) %>%
+  qflextable
+
+
+
+```
+
+
+It may also be useful to summarise information from the first consultation (at enrollment into the program):
+
+
+```{r sum_first_visit}
+
+# Create subset for first consultation
+dat_first_consultation <- dat %>%
+  # Keep only rows for first visit for each patient:
+  filter(visit_num == 1) %>% 
+  # Select patient ID and site of enrollment:
+  select(pat_id, pat_enrolment_site)
+
+# Create frequency table of enrollment sites:
+dat_first_consultation %>%
+  tabyl(pat_enrolment_site) %>%
+  qflextable
+
+```
+
+
+Now we have two different subsets, but both of them should contain the same patient IDs.  We can join the two datasets together to create a summary table with information from both the first and the last consultation.
+
+There are a couple of different ways to join data sets. We could use `bind_cols()` (which will literally just bind the columns from the two data sets together).  However, beware: this strategy won't check to see if the two data sets are in the same order.  There is a risk that information from two different patients could be combined in the same row, if the data sets are not in exactly the same order. Have a look at the help for more information (type `?bind_cols` in your console).
+
+*Reminder:*
+
+Check that:
+
+  1. The two data sets are sorted in the same order 
+  2. The two data sets have the same number of observations
+  3. The two data sets contain the same patient IDs
+
+```{r bind_cols_ex}
+
+# Create a new data set by binding the columns of the two data sets together:
+dat_last_first_1 <-
+  bind_cols(
+    dat_last_consultation,
+    dat_first_consultation
+    )
+
+```
+
+
+A better way to combine the two data sets would be to use the `dplyr::left_join()` function.  This function uses an identifier column that is common to both data sets to match up the rows between them.  In this case, we have a patient ID column in both data sets which we can use to match up the rows and join the two data sets together.  We choose a `left_join()` because this this will retain everything in the primary data set (first one in the join) and only rows from the second data set that have a match by patient ID in the first.  Type `?left_join` in your console to see the help page and learn more. You can also have a look at the Epidemiologist R handbook chapter on [joining data](https://epirhandbook.com/en/joining-data.html).
+
+
+```{r left_join_ex}
+
+# Create a new data set by joining the two data sets together:
+dat_last_first_2 <- left_join(
+  dat_last_consultation,  # This is the primary data set
+  dat_first_consultation, # This is the secondary data set
+  by = "pat_id")          # This is the column to match rows with
+
+# Create a frequency table of patient enrollment site from the joined data:
+dat_last_first_2 %>%
+  tabyl(pat_enrolment_site) %>%
+  qflextable
+
+# Create a frequency table of patient enrollment site by outcome status:
+dat_last_first_2 %>%
+  tabyl(pat_enrolment_site, outc_end) %>%
+  qflextable
+
+# Use gtsummary package instead to make the same cross-tabulation:
+dat_last_first_2 %>%
+  # Select columns to use in summary table:
+  select(pat_enrolment_site, outc_end) %>%
+  tbl_summary(
+    # Stratify by outcome status:
+    by = outc_end,
+    # Include row percentages:
+    percent = "row",
+    # Make nice label for enrollment site:
+    label = list(pat_enrolment_site = "Enrolment site")) %>%
+  # Add totals:
+  add_overall() %>%
+  # Update the header to reflect the statistics used:
+  modify_header(
+    update = list(all_stat_cols() ~ "**{level}**<br>N = {n}",
+                  stat_0 ~ "**Overall**<br>N = {N}")) %>%
+  # Make the labels bold:
+  bold_labels()
+
+```
+
+
+## Dealing with data on multiple excel sheets
+
+In the above section, we looked at how to combine two data sets column-wise.  However, for our second problem (referral data), we have data for each month in a different excel sheet.  These data need to be combined by row (they should all have the same column headers).  The function we can use for this is `row_bind()` (type `?row_bind` in your console to learn more):
+
+
+```{r row_bind_ex}
+
+# create database of consultations for patient 20000
+dat_20000 <- dat %>% filter(pat_id == 20000)
+
+# Create database of consultations for patient 20001
+dat_20001 <- dat %>% filter(pat_id == 20001)
+
+# Bind the two data sets together by row:
+dat_20000_20001 <- bind_rows(
+  dat_20000, # database 1
+  dat_20001, # database 2
+  .id = "df_origin" # this column identifies the source database for each row
+)
+
+```
+
+
+# Exercise
+
+**Your turn:**
+
+In the `data` folder for this session, you will find some additional data sets; one is for people living with HIV and has a very similar structure to the Hepatitis C data (lots of follow-up visits for each patient).  The other data sets are the referral data introduced earlier.
+
+  1. Using the HIV data in the `HIV Tout Survey` sub-folder, make summary tables of the first and last consultations (*hint: use the same strategies that were used for the Hepatitis C data above*)
+  2. Using the referral data in the `Referral pathway` sub-folder (choose one of the two files) combine all the data for each month into a single data.frame representing one year (*hint: use `bind_rows()` after importing the data*)
+  3. **Bonus task:** what would be a more efficient way of:
+     a. Importing data from many sheets at once and
+     b. Binding together many data sets at once by row?
+     (*hint: read the Epidemiologist R handbook section on using `purrr::map()` [here](https://epirhandbook.com/en/iteration-loops-and-lists.html#map) for suggestions on how to do this*)

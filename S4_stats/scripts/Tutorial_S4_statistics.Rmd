@@ -1,0 +1,1179 @@
+---
+title: "R coaching session 4 - statistics"
+author: "Amy Mikhail"
+date: "`r format(Sys.Date(), format = '%d %B %Y')`"
+output:
+  bookdown::html_document2:
+    code_folding: show
+    toc: yes
+    toc_float:
+      toc_collapsed: no
+      smooth_scroll: yes
+    toc_depth: 3
+theme: sandstone
+geometry: margin = 1.5cm
+editor_options:
+  markdown:
+    wrap: 72
+urlcolor: blue
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+
+# Set chunk options:
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE)
+
+```
+
+
+# Introduction:
+
+In this session, we will work with a dataset from the [Epidemiologist R handbook](https://epirhandbook.com/en/univariate-and-multivariable-regression.html) chapter on univariable and multivariable regression, to first create some descriptive statistics in summary tables in different ways, then perform univariable and multivariable regression on a binary outcome measure (patient status at exit: recovered or died) to determine risk factors for death.
+
+
+## Packages and functions required:
+
+
+You will need the following packages.  In the project folder, we have also included some handy wrapper functions for creating publication-ready summary tables and plots of the results of your statistical analysis. You can import these R functions to your environment by using the `source()` command as shown in the chunk below:
+
+
+```{r load_packages}
+
+# Ensures the package "pacman" is installed
+if (!require("pacman")) install.packages("pacman")
+
+# Check for, install and load the remaining required packages:
+pacman::p_load(
+  
+  # Project and file management
+  #############################
+  here,     # file paths relative to R project root folder
+  rio,      # import/export of many types of data
+  openxlsx, # special functions for handling Excel workbooks
+  
+  # Package install and management
+  ################################
+  remotes,  # install from github
+  
+  # General data management
+  #########################
+  skimr,        # data exploration
+  epikit,       # useful epi functions
+  zscorer,      # Calculate z scores from weight and height
+  
+  # Tables and statistics  
+  #######################
+  janitor,      # tables and data cleaning
+  gtsummary,    # making descriptive and statistical tables
+  corrr,        # correlation matrices
+  caret,        # other useful correlation functions
+  broom,        # extract model results summary and convert to a table
+  broom.mixed,  # more functions to extract and tidy model results
+  parameters,   # Alternative package for tidying up model results 
+  ztable,       # Make heatmap table
+  
+  # Models
+  #########
+  glmnet,         # needed to carry out variable selection
+  lme4,           # for multivariable regression with random effects
+  lmtest,         # for calculating likelihood ratios
+  
+  
+  # Plots - general
+  #################
+  #ggplot2,         # included in tidyverse
+  cowplot,          # combining plots  
+  RColorBrewer,     # color scales
+  gghighlight,      # highlight a subset
+  ggrepel,          # smart labels
+  ggExtra,          # fancy plots  
+  tsibble,          # epiweeks
+  viridis,          # colorblind-friendly scales
+  scales,           # helper functions
+  apyramid,         # age and sex pyramids
+  see,              # forest plots and other statistical plots
+  ggforestplot,     # Plot a forest plot of model results
+  
+  # Routine reports
+  #################
+  rmarkdown,        # produce PDFs, Word, Powerpoints, & HTML files
+  
+  # Tables for presentation
+  #########################
+  knitr,            # R Markdown report generation and html tables
+  flextable,        # Publication-ready tables
+  
+  # Tidyverse:
+  # dplyr, tidyr, tibble, readr, purrr, forcats, stringr, lubridate, ggplot2
+  ##############
+  tidyverse        # 9 packages for tidy data wrangling and presentation
+  #tidylog         # Logs changes in structure of data in pipe chains
+  
+)        
+
+# Install latex with tinytex package:
+#tinytex::install_tinytex()
+
+
+##########################################
+# Set all flextable backgrounds to white:
+set_flextable_defaults(background.color = "white")
+
+
+```
+
+
+## Importing data:
+
+You can import the dataset for this session from the `data` sub-folder in this project with `rio` and `here` packages as shown below.  Note that the data is already clean, so we can dive straight into some descriptive statistics.  Because the data is saved in `.rds` format, the column classes in the clean data are preserved.
+
+
+```{r import_data}
+
+# Import data:
+linelist <- import(here("data", "linelist_cleaned.rds"))
+
+```
+
+
+## Data exploration:
+
+The data set is a line listing of COVID-19 patients.  The outcome we are interested in is whether they had recovered or died by the time they exited the hospital (recorded in the column called `outcome`).  There are a number of potential risk factors for death as an outcome that we can look at; 
+
+  + demographics (age or age group, sex, hospital)
+  + patient characteristics (height and weight or BMI)
+  + time between symptom onset and hospital admission (`days_onset_hosp`)
+  + symptoms (e.g. fever, cough, temperature)
+  + PCR cycle threshold as a proxy for viral load (smaller number = higher load)
+  + Transmission context (source or ID of infector, generation time)
+  
+First of all, we can familiarise ourselves with the data using the `skim()` function: 
+
+```{r data_exploration}
+
+# Summarise dataset with skim:
+skim(linelist)
+
+```
+
+We can see that symptoms are currently recorded as character variables, but would be better represented as binary logical variables:
+
+```{r make_binary}
+
+# Convert symptoms to binary variables:
+linelist <- linelist %>% 
+  # Convert no and yes to FALSE and TRUE, respectively:
+  mutate(across(.cols = c(fever, chills, cough, aches, vomit), 
+                .fns = ~case_when(.x == "yes" ~ TRUE, 
+                                  .x == "no" ~ FALSE,
+                                  .default = NA)))
+
+```
+
+
+We can also take a quick look at our outcome variable, `outcome` with the `janitor::tabyl()` function:
+
+```{r check_outcome}
+
+# Summary table of outcome:
+tabyl(linelist, outcome)
+
+```
+
+
+We can see there are some missing values for outcome.  These can be removed:
+
+```{r remove_outcome_na}
+
+# Remove rows with missing values for outcome:
+linelist <- linelist %>% 
+  
+  # Remove rows where outcome is NA:
+  filter(!is.na(outcome))
+
+```
+
+
+The data is pretty clean already, but there are a few other things we could do to prepare it for analysis:
+
+  + Missing hospitals have been coded as missing but should be `NA`
+  + Gender is coded as `f` and `m` but would be better as `female` and `male`
+  + Create a binary case definition, where 'death' is the outcome of interest
+
+```{r prep_data}
+
+linelist <- linelist %>% 
+  
+  # Recode missing hospital as NA:
+  mutate(hospital = na_if(hospital, "Missing")) %>% 
+
+  # Recode gender:
+  mutate(gender = case_match(
+    gender, 
+    "f" ~ "Female", 
+    "m" ~ "Male", 
+    .default = gender)) %>% 
+  
+  # Case definition:
+  mutate(casedef = case_when(
+    outcome == "Death" ~ TRUE, 
+    outcome == "Recover" ~ FALSE,
+    .default = NA
+  ))
+
+  
+
+```
+
+
+Now that our data is ready, we can begin to summarise it with some basic statistics.
+
+
+# Statistical analysis {.tabset}
+
+
+## Exercise 1
+
+
+**Descriptive tables with `tabyl()` and `flextable()`**
+
+We have already seen how easy it is to get a quick summary table with the `tabyl()` function from the `{janitor}` package. The function will provide us with the number and proportion of cases for each value in the variable.  
+
+However, we would probably want to tidy the basic output up before putting such a table in a report. Fortunately the `{janitor}` package has a number of `adorn_` functions that do exactly this. We can convert the proportions to percentages, adjust how many decimal places are shown, and add row and column totals. We can also suppress missing values. 
+
+With the `{flextable}` package, we can convert our table to a nicely formatted table ready for inclusion in a report.  We can adjust the way the header rows appear, give the column names nice labels, merge cells, make font bold or italic, change the background colour of cells, add borders and many more features.  For a detailed introduction to using flextable, see the [Tables for presentation](https://epirhandbook.com/en/tables-for-presentation.html) section in the Epidemiologist R handbook.
+
+Here is an example with the `outcome` variable:
+
+
+```{r ex1_example}
+
+# Create basic summary table with tabyl:
+outcome_tab <- linelist %>% 
+  
+  # Basic table with missing values supressed:
+  tabyl(outcome, show_na = FALSE) %>% 
+  
+  # Add Column totals (the default):
+  adorn_totals() %>% 
+  
+  # Format proportions as a percentage with two digits after the decimal point:
+  adorn_pct_formatting(digits = 2) %>% 
+  
+  # Change column names for merging later:
+  rename(
+    Outcome = outcome,
+    Cases_n = n, 
+    Cases_percent = percent) %>% 
+  
+  # Convert to a flextable:
+  qflextable() %>% 
+  
+  # Change the theme to something nicer:
+  theme_booktabs() %>% 
+  
+  # Add a line above the 'total' row (under second row):
+  hline(i = 2, border = fp_border_default()) %>% 
+
+  # Separate header:
+  separate_header(
+    opts = c("span-top", "center-hspan")
+  ) %>% 
+  
+  # Give the column names nice labels:
+  set_header_labels(
+    Outcome = "Outcome",
+    Cases_n = "n",
+    Cases_percent = "%"
+  ) %>%
+  
+  # Make the header row bold:
+  bold(part = "header") %>% 
+  
+  # Right-align case numbers and percent columns:
+  align(j = 2:3, align = "right", part = "all") %>%
+  
+  # Center align cases header title:
+  align(i = 1, j = 2:3, align = "center", part = "header") %>% 
+  
+  # Make bottom row bold:
+  bold(i = 3) %>% 
+  
+  # Make bottom row shaded light grey:
+  bg(i = 3, bg = "lightgrey") %>% 
+  
+  # Autofit column width to size of header text:
+  set_table_properties(layout = "autofit")
+
+
+# Print the table:
+outcome_tab
+
+
+```
+
+**Your turn:**
+
+Using the code above as a guide, try creating a summary table with:
+
+  + the pecentage of cases in each `hospital` stratified by `gender`. 
+  + format the percentages so that there are no digits after the decimal point. 
+  + Add row totals so that the column headers are hospital, female, male, total.
+  + Make the background colour of the row with `other` hospitals orange.
+  
+
+<details>
+  <summary>*Click for hints*</summary>
+
+  1. You can cross-tabulate with `tabyl()` by adding two column names instead of one.
+  2. To convert the nunbers in the cells to percent, use `adorn_percent()` before formatting. 
+  3. To conditionally format a row, provide a logical condition after the tilde, e,g. `bold(i = ~ Hospital == "Interesting value")`.  
+  4. Don't forget to count the number of rows (`i = ...`) or columns (`j = ...`) to indicate which ones you want to format .
+  5. Use ranges to refer to a group of columns or rows, e.g. `1:5`
+
+</details> 
+
+
+<details>
+  <summary>*Click for solution*</summary>
+
+```{r ex1_solution, hide=TRUE}
+
+# Create basic summary table with tabyl:
+hospgender_tab <- linelist %>% 
+  
+  # Basic crosstab of hospital stratified by gender with NAs supressed:
+  tabyl(hospital, gender, show_na = FALSE) %>% 
+  
+  # Add row totals:
+  adorn_totals(where = "col") %>%
+  
+  # Convert numbers to percent:
+  adorn_percentages() %>% 
+  
+  # Format proportions as a percentage with two digits after the decimal point:
+  adorn_pct_formatting(digits = 0) %>% 
+  
+  # Change column names for merging later:
+  rename(
+    Hospital = hospital,
+    Cases_female = Female, 
+    Cases_male = Male) %>% 
+  
+  # Convert to a flextable:
+  qflextable() %>% 
+  
+  # Change the theme to something nicer:
+  theme_booktabs() %>% 
+  
+  # Separate header:
+  separate_header(
+    opts = c("span-top", "center-hspan")
+  ) %>% 
+  
+  # Give the column names nice labels:
+  set_header_labels(
+    Hospital = "Hospital",
+    Cases_female = "Female",
+    Cases_male = "Male"
+  ) %>%
+  
+  # Make the header row bold:
+  bold(part = "header") %>% 
+  
+  # Right-align case numbers and percent columns:
+  align(j = 2:4, align = "right", part = "all") %>%
+  
+  # Center align cases header title:
+  align(i = 1, j = 2:4, align = "center", part = "header") %>% 
+  
+  # Make bottom row bold:
+  bold(i = 3) %>% 
+  
+  # Make bottom row shaded light grey:
+  bg(i = ~ Hospital == "Other", bg = "orange") %>% 
+  
+  # Autofit column width to size of header text:
+  set_table_properties(layout = "autofit")
+
+
+# Print the table:
+hospgender_tab
+
+
+```
+</details> 
+
+
+## Exercise 2
+
+
+**Descriptive summary statistics with `{dplyr}`**
+
+Sometimes counts and percentages aren't enough. If you need to calculate other simple summary metrics, such as medians or means for numeric variables, this can easily be done with the `{dplyr}` function `summarise()`.  This is particularly useful when you want to calculate summary statistics for groups within your data.
+
+Suppose we want to calculate the earliest, median and latest onset date by gender.  We could do this with dplyr as below (once again we will use `{flextable}` to tidy up the aesthetics):
+
+
+```{r ex2_example}
+
+# Create summary statistics by gender:
+gendersumtab <- linelist %>% 
+  
+  # Rename gender:
+  rename(Sex = gender) %>% 
+  
+  # Drop missing values:
+  drop_na(Sex, date_onset) %>% 
+  
+  # Define contents of summary table:
+  summarise(
+    # Group results by gender:
+    .by = Sex,
+    # Calculate number of cases:
+    Cases = n(),
+    # Calculate min onset date:
+    Onset_min = min(date_onset, na.rm = TRUE),
+    # Calculate median onset date:
+    Onset_med = median(date_onset, na.rm = TRUE),
+    # Calculate maximum onset date:
+    Onset_max = max(date_onset, na.rm = TRUE)
+    ) %>% 
+  
+  # Convert to flextable:
+  qflextable() %>% 
+  
+  # Change theme:
+  theme_booktabs() %>% 
+  
+  # Separate header:
+  separate_header(
+    opts = c("span-top", "center-hspan")
+  ) %>% 
+  
+  # Give the column names nice labels:
+  set_header_labels(
+    Onset_min = "Earliest",
+    Onset_med = "Median",
+    Onset_max = "Latest"
+  ) %>% 
+  
+  # Autofit column width to size of header text:
+  set_table_properties(layout = "autofit")
+
+# Print table:
+gendersumtab
+
+```
+
+
+**Notes:**
+
+  + For anyone who is more used to using american spelling, both the american spellings (often with a 'z') and the English spellings (often with an 's') will work for function calls in tidyverse r packages interchangeably.  Thus, `summarize()` and `summarise()` will both work.
+  + In the code above, we passed the name of the column we want to stratify by (gender in this case) to the `.by = ...` argument of the `summarise()` function. Alternatively, we could use the `group_by()` function before `summarise()`.  This will have the same effect on the summary as using the `.by` argument, but beware - the *whole data set* will remain grouped by the stratifying variable until you use the `ungroup()` function.  See below for example:
+  
+
+```{r ex2_alternative_method}
+
+# Create summary statistics by gender:
+groupedll <- linelist %>% 
+  
+  # Drop missing values:
+  drop_na(gender, date_onset) %>% 
+  
+  # Create a new variable, max age before grouping by anything:
+  mutate(maxage = max(age_years, na.rm = TRUE)) %>% 
+  
+  # Now group the data by gender:
+  group_by(gender) %>% 
+  
+  # Now create the new variable max age again, this time after the grouping:
+  mutate(maxagegrouped = max(age_years, na.rm = TRUE))
+
+
+# Are the two variables the same? 
+# No, because one is calculated after grouping by gender and the other is not:
+
+# Here is what max age before grouping looks like:
+groupedll %>% tabyl(maxage, gender)
+
+# And here is what it looks like after grouping by gender:
+groupedll %>% tabyl(maxagegrouped, gender)
+  
+
+
+```
+
+
+Here we can see that before grouping, there is only one maximum age for the whole data set (84 years). After grouping by gender, we see that the maximum age for females is 52 years, and for males is 84 years.  If we now use the `ungroup()` function and try creating the same variable again, we should return to a single value (84 years) for the whole data set:
+
+
+```{r ex2_ungroup}
+
+ungroupedll <- groupedll %>% 
+  
+  # Remove the grouping from the data:
+  ungroup() %>% 
+  
+  # Now create the max age variable again:
+  mutate(maxageungrouped = max(age_years, na.rm = TRUE))
+
+  # Now create the table again:
+  ungroupedll %>% tabyl(maxageungrouped, gender)
+  
+  # We can also show that the two variables 
+  # before grouping and after un-grouping are identical:
+  identical(ungroupedll$maxage, ungroupedll$maxageungrouped)
+
+```
+
+
+The `group_by()` function can be very useful if you want to calculate something based on grouping by another variable, and you are intending to add the calculations as a new variable to your original data set.  If on the other hand, you are creating a summary table, it may be safer to use the `.by = ...` argument of the `summarise()` function as this won't affect the data set itself, only the new table of data created by the `summarise()` function.
+
+
+
+
+**Your turn:**
+
+Using the code above as a guide, try creating a summary table with:
+
+  + the number of cases per `hospital`
+  + exclude (filter out) hospitals that are `other` (name not specified)
+  + the earliest, median and latest onset date by hospital
+  + the median age by hospital. 
+
+<details>
+  <summary>*Click for hints*</summary>
+
+  1. You can use the `filter()` command to filter out hospitals: `filter(!hospital %in% "Other")`
+  2. Remeber to `drop_na()` for all the variables you will use to make the table (hospital, date_onset, age) 
+  3. Use hospital as the grouping variable in the `.by` argument of `summarise()`
+  4. Give summary statistics that are based on the same variable (`date_onset` in this case) the same prefix so that the `separate_header()` function can be used to group them automatically in `flextable` 
+
+</details> 
+
+
+<details>
+  <summary>*Click for solution*</summary>
+
+```{r ex2_solution, hide=TRUE}
+
+# Create summary statistics by gender:
+hospsumtab <- linelist %>% 
+  
+  # Filter out hospital = 'other'
+  filter(!hospital %in% "Other") %>% 
+
+  # Rename Hospital:
+  rename(Hospital = hospital) %>% 
+  
+  # Drop missing values:
+  drop_na(Hospital, date_onset, age_years) %>% 
+  
+  # Define contents of summary table:
+  summarise(
+    # Group results by gender:
+    .by = Hospital,
+    # Calculate number of cases:
+    Cases = n(),
+    # Calculate min onset date:
+    Onset_min = min(date_onset, na.rm = TRUE),
+    # Calculate median onset date:
+    Onset_med = median(date_onset, na.rm = TRUE),
+    # Calculate maximum onset date:
+    Onset_max = max(date_onset, na.rm = TRUE),
+    # Calculate median age:
+    Age_med = median(age_years, na.rm = TRUE)
+    ) %>% 
+  
+  # Convert to flextable:
+  qflextable() %>% 
+  
+  # Change theme:
+  theme_booktabs() %>% 
+  
+  # Separate header:
+  separate_header(
+    opts = c("span-top", "center-hspan")
+  ) %>% 
+  
+  # Give the column names nice labels:
+  set_header_labels(
+    Onset_min = "Earliest",
+    Onset_med = "Median",
+    Onset_max = "Latest",
+    Age_med = "Median"
+  ) %>% 
+  
+  # Autofit column width to size of header text:
+  set_table_properties(layout = "autofit")
+
+# Print table:
+hospsumtab
+
+
+```
+</details>
+
+
+## Exercise 3
+
+**Demonstration of `{gtsummary}` for summary statistics**
+
+Often, the summary statistics we want to create are presented in the same format.  The `{gtsummary}` package was designed to make tabulating summary statistics in a ready-to-publish format really easy.  
+
+The package will automatically calculate appropriate summary statistics depending on whether the variable to summarise is numeric, categorical or logical.  To demonstrate this, we will make a table stratified by gender with a summary of age in years (numeric variable), hospital (categorical variable) and fever (a logical variable).
+
+As for the other techniques, there are built in arguments to handle missing values.
+
+We will make a descriptive summary table using the `tbl_summary()` function:
+
+```{r ex3_gtsummary_demo}
+
+# Create summary table:
+gtsumtab <- linelist %>% 
+  
+  # Filter out hospital = 'other'
+  filter(!hospital %in% "Other") %>% 
+  
+  # Create the summary table:
+  tbl_summary(
+    # Select which variables to include:
+    include = c(gender, age_years, hospital, fever), 
+    # Select which variable to stratify by:
+    by = gender, 
+    # Specify how to handle missing values:
+    missing = "no", 
+    # Specify labels for columns:
+    label = list(
+      age_years ~ "Age (years)",
+      hospital ~ "Hospital", 
+      fever ~ "Has fever"
+    ),
+    # Specify sorting by frequency:
+    sort = all_categorical() ~ "frequency"
+  ) %>% 
+  
+  # Add overall summary figures:
+  add_overall() %>% 
+  
+  # Format variable labels:
+  bold_labels() %>% 
+  italicize_labels() %>% 
+  
+  # Tidy up column headers:
+  modify_header(
+    label = "**Characteristic**",
+    stat_0 = "**Overall**\nN = {N}",
+    stat_1 = "**Female**\nN = {n}",
+    stat_2 = "**Male**\nN = {n}"
+    ) %>% 
+  
+  # Format as flextable:
+  as_flex_table()
+  
+
+# Print the table:
+gtsumtab
+
+```
+
+
+## Excercise 4
+
+**Univariable analysis with `{gtsummary}`**
+
+In the dataset, we have a number of potential risk factors for death as an outcome.  We can calculate odds ratios for individual risk factors and display the results collectively with the `gtsummary::tbl_uvregression()` function.
+
+This function is actually a wrapper for the base r `glm()` function (to create generalised linear models).  It is worth understanding how the base r model functions work, since we will need to use them later to create a multivariable model.  The syntax for the `glm()` function for a univariable model (one outcome measure regressed against one explanatory variable) is as follows:
+
+  + `formula = outcome_measure ~ explanatory_variable`
+  + `family = error_distribution(link = model_link_function)` (to see the different options, type `?family()`)
+  + `data = name_of_dataset`
+
+Note that the tilde `~` is used to regress the outcome measure against explanatory variables.  You will find the tilde on your keyboard in different places, depending on your keyboard language and layout.  A good source for checking where to find it for a given keyboard layout is [here](https://keyshorts.com/blogs/blog/44712961-how-to-identify-laptop-keyboard-localization).
+
+Lets have a look at how to perform a GLM to obtain the odds of dying if the patient had a cough, compared to patients with no cough. We will use the binary logical case definition we prepared earlier ( `casedef` death = TRUE, recover = FALSE) as our outcome measure. We construct the arguments of the `glm()` function as follows:
+
+  + `formula = casedef ~ cough`
+  + `family = binomial(link = "logit")` (this will give odds ratios)
+  + `data = linelist` (or alternatively, we can pipe the data set in as below)
+
+*Note:* When the data set is not the first argument that a function takes, you need to name all the other arguments in the function (that don't have default values or that you want to specify a value for) in order for R to understand what to do with the dataset when you pipe it in.  In the example below, we already specified the `formula` and `family` arguments by name, so R automatically assigns the piped in data set to the `data` argument as that is the only mandatory argument left for which a value had not been assigned yet.
+
+```{r ex4_example_glm}
+
+# Specify the data set:
+model_cough <- linelist %>% 
+  # Creat the model:
+  glm(formula = casedef ~ cough, family = binomial(link = "logit"))
+
+# Look at a summary of the results:
+summary(model_cough)
+
+
+```
+
+
+We can see from the p value (last column in the summary results) that having a cough is not significantly associated with death as an outcome (*p* > 0.05).  However, the output is a little difficult to read, since the estimates are not expressed as odds ratios and we also don't have confidence intervals (though we could work them out from the standard errors).  In order to obtain odds ratios, we need to get the exponent of the estimate. We can do this by applying the `exp()` function to the second model coefficient (we are interested in the coefficient for `coughTRUE`, not the intercept):
+
+```{r ex3_example_exp}
+
+# Convert the estimate for coughTRUE to odds ratio:
+exp(model_cough$coefficients[2])
+
+```
+
+
+This tells us that the odds of dying with a cough are `1.1239` but we still need to obtain the 95% confidence intervals (we already know that they will cross 1 because the p value is not significant).  The `{broom}` package has functions that tidy output from many different types of models available in base R into a table.  This can include 95% confidence intervals, and also gives the option to display the exponent of the estimates (i.e. to display odds ratios).  
+
+The `broom::tidy()` function for GLM models takes the following arguments (see `?broom::tidy.glm`):
+
+  + `x` - the model object that we created with glm (in this case `model_cough`)
+  + `conf.int` - logical, do we want to include confidence intervals (we do)
+  + `conf.level` - what level of confidence interval to include (default is 95%)
+  + `exponentiate` - logical, do we want the exponent of the estimates (we do)
+
+Here is how the tidy table of results looks for our model:
+
+
+```{r ex4_example_broom}
+
+mctidy <- model_cough %>% 
+  
+  tidy(
+    conf.int = TRUE,    # We do want confidence intervals in the output
+    conf.level = 0.95,  # We want 95% confidence intervals (the default)
+    exponentiate = TRUE # We want the exponents (display results as odds ratios)
+  )
+
+# Print the tidied up model results:
+mctidy
+
+```
+
+
+Now we have everything we need:
+
+  + The odds of dying if you have a cough are `1.12`
+  + The 95% CI for these odds are `0.946 - 1.34` (crosses 1, as predicted)
+  + The *p* value for having a cough is `0.184` (not significant)
+
+This is already a much more helpful way of reviewing the model results.  However, what if we want to conduct univariable analysis for several different risk factors at once, and put all the results in the same table?  This is where the `gtsummary::tbl_uvregression()` function comes into its own.  It does the following things:
+
+  + takes a list of explanatory variables as input and iterates through them; 
+  + uses the base r `glm()` function to create the model for each variable;
+  + tidies up the results into a table using `broom::tidy()`
+  + combines the results for each explanatory variable into a single table;
+  + formats the table into a publication-ready format with `{flextable}`
+
+As an example, we will calculate the odds of dying for four risk factors: 
+
+  + different age categories `age_cat` (this is a multi-level factor)
+  + `gender` (this is a factor with two levels)
+  + `fever` (this is a binary logical variable)
+  + `chills` (this is a binary logical variable)
+
+Since `tbl_uvregression()` combines several different functions into one, the arguments from each of the separate functions are available, but they are given different names.  The arguments we need are listed below, along with the values we will choose:
+
+  + `method = glm`: run a generalised linear model
+  + `y = casedef`: use casedef (death TRUE/FALSE) as the outcome variable
+  + `family = binomial(link = "logit")`: this will compute odds ratios
+  + `exponentiate = TRUE`: this will antilog the coefficients so that they are returned as odds ratios
+  + `hidden_n = TRUE`: this will hide the totals column (not needed as we will join it to the summary table later)
+  + `label = varlabels`: give variables nice names
+
+
+For binary logical variables (TRUE/FALSE), `FALSE` will be used as the reference value and odds ratios will be calculated for when the value is `TRUE`.  
+
+For two-level factors (such as gender), the first factor level (by alphabetic order this is `Female`) will be used as the reference value and the other value (`Male`) will be compared to the reference.  For multi-level factors (such as age category), the first level will be used as a reference (in this case 0-4 year olds) and all the other factor levels will be compared to it.  
+
+If you want to change which factor level is used as the reference, you can use the `stats::relevel()` function (part of base R) and specify which level you want to use with the `ref = ...` argument, e.g. to use the 70+ age group as a reference, within a piped workflow, we would do: 
+
+`linelist %>% mutate(age_cat = relevel(ref = "70+"))`
+
+```{r ex4_example_sumtab}
+
+# Create logical case definition:
+uvtab <- linelist %>% 
+  
+  # Select variables to calculate OR on:
+  select(casedef, age_cat, gender, fever, chills) %>% 
+  
+  # Drop missing values:
+  drop_na() %>% 
+  
+  # Run the univariable analysis:
+  tbl_uvregression(                                   
+      method = glm,
+      y = casedef,                 
+      method.args = list(family = binomial(link = "logit")), 
+      exponentiate = TRUE, 
+      add_estimate_to_reference_rows = TRUE,
+      hide_n = TRUE,
+      label = list(
+        age_cat ~ "Age category (years)",
+        gender ~ "Sex",
+        fever ~ "Has fever", 
+        chills ~ "Has chills"
+      )
+    ) %>%
+    bold_p() %>% 
+    modify_table_styling(
+      columns = ci,
+      rows = reference_row %in% TRUE,
+      missing_symbol = "Ref."
+    )
+
+# Print the table:
+uvtab
+
+```
+
+
+**Your turn:**
+
+Using the code above as a guide, perform univariable analysis and try creating a table of the results using `gtsummary::tbl_uvregression()` with:
+
+  + case definition as above (death as outcome)
+  + calculate odds ratios for all symptoms in the data set
+  + what symptoms are most associated with death as an outcome?
+  
+<details>
+  <summary>*Click for hints*</summary>
+
+  1. You can select different columns to include by changing the list of columns within the `select()` command
+  2. Remember to change the variable labels too;
+  3. Remember to remove missing values before piping in to `tbl_uvregression()`
+
+</details> 
+
+
+<details>
+  <summary>*Click for solution*</summary>
+
+```{r ex4_solution}
+
+symuvtab <- linelist %>% 
+  
+  # Select variables to calculate OR on:
+  select(casedef, fever, chills, cough, aches, vomit, temp) %>% 
+  
+  # Drop missing values:
+  drop_na() %>% 
+  
+  # Run the univariable analysis:
+  tbl_uvregression(                                   
+      method = glm,
+      y = casedef,                 
+      method.args = list(family = binomial(link = "logit")), 
+      exponentiate = TRUE, 
+      add_estimate_to_reference_rows = TRUE,
+      hide_n = TRUE,
+      label = list(
+        fever ~ "Has fever", 
+        chills ~ "Has chills", 
+        cough ~ "Has cough",
+        aches ~ "Has myalgia",
+        vomit ~ "Has vomited", 
+        temp ~ "Temperature (degrees centigrade)"
+      )
+    ) %>%
+    bold_p() %>% 
+    modify_table_styling(
+      columns = ci,
+      rows = reference_row %in% TRUE,
+      missing_symbol = "Ref."
+    )
+
+
+# Print the table:
+symuvtab
+
+```
+
+
+The results show that none of the symptoms listed significantly increase the odds of death occurring over recovery.
+
+
+</details>
+
+
+
+## Exercise 5
+
+**Multivariable analysis with `{gtsummary}`**
+
+So far, we have explored how to perform a univariable analysis on individual risk factors in our data set.  However, it may be more useful to look at the impact of specific risk factors when other risk factors are also taken into account.  To assess this, we can construct a multivariable model.  
+
+The `{gtsummary}` package doesn't have a single wrapper function to create multivariable models from scratch, because the individual variables can be combined in the model in different ways.  The main combinations you will come across are:
+
+  + *linear relationships* between the variables (where they are added together with a `+` symbol) and 
+  + *interaction terms* (where two variables are not completely independent and their interaction with each other is represented by an asterisk `*`).  
+  
+For example, if we wanted to include height and weight in our model, we know they are not completely independent of each other, so it would be better to represent them with an interaction term.  Suppose we wanted to look at age, gender, height and weight (where age and gender are independent of each other but height and weight are not) we would do:
+
+`formula = casedef ~ age + gender + (wt_kg * ht_cm)`
+
+This will show us how age, gender and weight for height impact on the odds of dying:
+
+
+```{r ex5_example_interaction}
+
+# Create a model based on patient demographics:
+model_demographics <- linelist %>% 
+  
+  # Specify the model formula, type and link function:
+  glm(
+    formula = casedef ~ age + gender + (wt_kg * ht_cm), 
+    family = binomial(link = "logit")
+    ) %>% 
+  
+  # Tidy up and display the model results in a table:
+    tidy(
+    conf.int = TRUE,    # We do want confidence intervals in the output
+    conf.level = 0.95,  # We want 95% confidence intervals (the default)
+    exponentiate = TRUE # We want the exponents (display results as odds ratios)
+  )
+
+# Print the results:
+model_demographics
+
+```
+
+
+As you can see, variables separated by a plus symbol have individual results.  Variables combined in an interaction term have both individual results and a combined result for the interaction.
+
+Now that we have the syntax for creating a multivariable model, lets try to make a model with variables that are more likely to have an impact on death as an outcome:
+
+  + age (include apriori - impacts other things such as BMI, exposures etc.)
+  + gender (include apriori - potentially impacts other things)
+  + bmi (are people with very low or very high BMI more likely to die?)
+  + hospital (did some hospitals have worse outcomes than others?)
+  + source (did exposure at funerals increase the odds of death?)
+  + ct_blood (are people with high viral load - early CT - more likely to die?)
+  + temp (are people with higher temperatures more likely to die?)
+  + days_onset_hosp (are people who were hospitalised later more likely to die?)
+
+
+First, we construct the model using the `glm()` function. Because we are not looking at any interaction terms, we can use simpler syntax, piping in the variables we want to include in the model and using the dot `.` as a placeholder for each of the variables, which will all be added to the model with the default approach (additive, represented by the `+` symbol):
+
+
+```{r ex5_example_rf_model}
+
+# Pipe in the data set:
+model_rf <- linelist %>% 
+  
+  # Filter out hospital = 'other'
+  filter(!hospital %in% "Other") %>% 
+  
+  # Change the reference value for source to "other":
+  mutate(source = relevel(x = factor(source), ref = "other")) %>% 
+  
+  # Select variables to put in the model:
+  select(
+    casedef, 
+    age_years, 
+    gender, 
+    bmi,
+    hospital, 
+    source, 
+    ct_blood, 
+    temp, 
+    days_onset_hosp
+    ) %>% 
+  
+  # Construct the model:
+  glm(formula = casedef ~ ., family = binomial(link = "logit"))
+
+  
+
+```
+
+
+To view the results, we will use the `gtsummary::tbl_regression()` function:
+
+```{r ex5_example_rf_results}
+
+# Pipe in the model:
+mrf_res <- model_rf %>% 
+  
+  # Create the table of results:
+  tbl_regression(
+    # Exponentiate to get Odds Ratios
+    exponentiate = TRUE, 
+    # Add estimate to reference values
+    add_estimate_to_reference_rows = TRUE, 
+    # Specify labels for columns:
+    label = list(
+      age_years ~ "Age (years)",
+      gender ~ "Sex",
+      bmi ~ "Body mass index",
+      hospital ~ "Hospital", 
+      source = "Exposure event",
+      ct_blood ~ "Virus PCR cycle threshold",
+      temp ~ "Temperature (degrees centegrade)",
+      days_onset_hosp ~ "Time to hospitalisation (days)"
+    )) %>% 
+  
+  # Make significant results bold:
+  bold_p() %>%
+  
+  # Add a custom label to indicate which value was used as a reference:
+  modify_table_styling(
+    columns = ci,
+    rows = reference_row %in% TRUE,
+    missing_symbol = "Ref."
+    )
+
+# Print the results:
+mrf_res
+
+```
+
+
+The table shows that we have three significant results from our model, one of which is a risk factor (odds ratio above 1) and two of which are protective (odds ratio less than 1):
+
+  + `hospital`: Being at St Mark's maternity hospital increases the odds of dying 
+  + `ct_blood`: having a higher PCR cycle threshold (=lower viral load) is protective against death 
+  + `days_onset_hosp`: longer periods between symptom onset and hospitalisation are protective against death
+
+The first result (being at St Mark's maternity hospital) might also be a proxy for another risk factor: pregnancy. We don't have data on whether or not patients were pregnant, but we could investigate if this is likely by creating a new variable to indicate which patients are adult women of child-bearing age:
+
+```{r ex5_example_explore_results}
+
+linelist <- linelist %>% 
+  
+  # Create variable to show whether patient is a woman of child bearing age
+  # (female and aged between 12 and 45 years)
+  mutate(wcba = case_when(
+    gender == "Female" & between(x = age_years, left = 12, right = 45) ~ TRUE, 
+    gender == "Female" & !between(x = age_years, left = 12, right = 45) ~ FALSE,
+    gender == "Male" ~ FALSE, 
+    .default = NA
+  ))
+
+# Create table of results:
+wcbatab <- linelist %>% 
+
+  tabyl(hospital, wcba) %>% 
+  
+  adorn_percentages() %>% 
+  
+  adorn_pct_formatting()
+
+# Print the table:
+wcbatab
+
+```
+
+
+Surprisingly, the proportion of patients that are women of child-bearing age at St Mark's maternity hospital is only slightly higher than the other (non-maternity) hospitals.  If we view the data for that hospital, we can see that there are a number of patients with unlikely demographics, such as adult males.  It is possible that the hospital was repurposed during the crisis and had other (general) wards as well - or alternatively this could be an artefact because we are after all looking at fake data ;-) Other reasons for a particular hospital being flagged might be if their procedures for dealing with very ill cases were not as good as the other hospitals, if they received more patients earlier on in the epidemic when procedures were not as well known, or due to the hospital being a referral centre for more acutely ill cases.
+
+
+The second result (higher PCR cycle threshold being protective against death) is as we would expect, since high Ct is a proxy for low viral load and we would expect people with higher viral load to be more at risk of death.  
+
+The third significant result (reaching the hospital later in the episode of illness being protective against death) is a bit more nuanced - it is possible that people with very short periods between onset and hospitalisation were more accutely ill and therefore more at risk of dying, than those hospitalised later in their illness. If this were a real analysis, this result would need some further investigation and consideration of potential confounding factors (particularly one that could indicate severity of illness).  
+
+For now, there is one more thing that we can do to present our results in a way that would make them easier to interpret; we can use the `gtsummary::tbl_merge()` function to merge a table of descriptive statistics with analytic results.  First we create the table of descriptive statistics for the variables in our model, as we did in exercise 3:
+
+
+```{r ex5_descriptive_tab}
+
+# Create summary table:
+mrfdesctab <- linelist %>% 
+  
+  # Filter out hospital = 'other'
+  filter(!hospital %in% "Other") %>% 
+  
+  # Change the reference value for source to "other":
+  mutate(source = relevel(x = factor(source), ref = "other")) %>% 
+  
+  # Create the summary table:
+  tbl_summary(
+    # Select which variables to include:
+    include = c(
+      casedef, 
+      age_years, 
+      gender, 
+      bmi,
+      hospital, 
+      source, 
+      ct_blood, 
+      temp, 
+      days_onset_hosp), 
+    # Select which variable to stratify by:
+    by = casedef, 
+    # Specify how to handle missing values:
+    missing = "no", 
+    # Specify labels for columns:
+    label = list(
+      age_years ~ "Age (years)",
+      gender ~ "Sex",
+      bmi ~ "Body mass index",
+      hospital ~ "Hospital", 
+      source = "Exposure event",
+      ct_blood ~ "Virus PCR cycle threshold",
+      temp ~ "Temperature (degrees centegrade)",
+      days_onset_hosp ~ "Time to hospitalisation (days)"
+    ),
+    # Specify sorting by frequency:
+    sort = all_categorical() ~ "frequency"
+  ) %>% 
+  
+  # Add overall summary figures:
+  add_overall() %>% 
+  
+  # Format variable labels:
+  bold_labels() %>% 
+  italicize_labels() %>% 
+  
+  # Tidy up column headers:
+  modify_header(
+    label = "**Characteristic**",
+    stat_0 = "**Overall**\nN = {N}",
+    stat_1 = "**Recovered**\nN = {n}",
+    stat_2 = "**Died**\nN = {n}"
+    )
+
+
+# Print the table:
+mrfdesctab
+
+```
+
+
+Now we can merge the two tables:
+
+
+```{r ex5_mergtabs}
+
+# Create the merged table:
+final_restab <- tbl_merge(
+  # List the tables to merge:
+  tbls = list(mrfdesctab, mrf_res),
+  # Give each table its own heading:
+  tab_spanner = c("**Descriptive summary**", "**Multivariable model**")
+)
+
+# Print the merged table:
+final_restab
+
+
+```
+
+
+# Further reading
+
+For more detail on how to calculate and display descriptive statistics, see the following chapters of the **Epidemiologist R handbook**:
+
+  + [Chapter 17: Descriptive tables](https://epirhandbook.com/en/descriptive-tables.html)
+  + [Chapter 18: Simple statistical tests](https://epirhandbook.com/en/simple-statistical-tests.html)
+  
+For details on how to conduct univariate and multivariable regression analysis, see:
+
+  + [Chapter 19: Univariate and multivariable regression](https://epirhandbook.com/en/univariate-and-multivariable-regression.html)
+
